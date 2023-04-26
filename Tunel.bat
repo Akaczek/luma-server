@@ -1,0 +1,1 @@
+ngrok tcp -region=eu 3001
