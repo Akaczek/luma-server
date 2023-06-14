@@ -10,6 +10,17 @@ const io = new Server(server, {
   },
 });
 
+const createRanking = (players) => {
+  const ranking = Object.keys(players).map(key => {
+    return {
+      userName: players[key].userName,
+      score: players[key].score
+    }
+  }).sort((a, b) => b.score - a.score);
+
+  return ranking;
+}
+
 
 let room = {
   presenter: {
@@ -25,6 +36,8 @@ let questions = [];
 let currentQuestion = 0;
 
 let real_answer_to_check = '';
+
+let number_of_answers = 0;
 
 io.on("connection", (socket) => {
   console.log("a user connected");
@@ -47,7 +60,8 @@ io.on("connection", (socket) => {
           [socket.id]: {
             userName: data.userName,
             score: 0,
-            type: data.type
+            type: data.type,
+            currentOpenAnswer: ''
           }
         }
       }
@@ -69,7 +83,6 @@ io.on("connection", (socket) => {
   });
 
   socket.on('start_game', (quizId) => {
-    console.log(quizId);
     const urls = [
       `http://127.0.0.1:8090/api/collections/quiz_question/records?perPage=100&filter=(quiz="${quizId}")`,
       `http://127.0.0.1:8090/api/collections/music_question/records?perPage=100&filter=(quiz="${quizId}")`,
@@ -84,23 +97,89 @@ io.on("connection", (socket) => {
         const {real_answer, ...question} = questions[currentQuestion];
         io.emit('next_question', question);
         real_answer_to_check = real_answer;
-        currentQuestion++;
-
-        let timer = setInterval(() => {
-          if (currentQuestion === questions.length) {
-            clearInterval(timer);
-            io.emit('game_finished');
-            currentQuestion = 0;
-          } else {
-            const {real_answer, ...question} = questions[currentQuestion];
-            io.emit('next_question', question);
-            real_answer_to_check = real_answer;
-            currentQuestion++;
-          }
-        }, 1000);
       });
-
   });
+
+  socket.on('answer', (answer) => {
+    const {real_answer, ...question} = questions[currentQuestion];
+    if(answer.questionId === question.id){
+      number_of_answers++;
+
+      if (question.collectionName === 'quiz_question' && real_answer === answer.answer) {
+        socket.emit('good_answer');
+        room = {
+          ...room,
+          players: {
+            ...room.players,
+            [socket.id]: {
+              ...room.players[socket.id],
+              score: room.players[socket.id].score + 1
+            }
+          }
+        }
+
+        if (number_of_answers === Object.keys(room.players).length) {
+          io.emit('close_answers_checked', question.real_answer);
+        }
+      }
+
+      if (question.collectionName === 'music_question' || question.collectionName === 'open_question') {
+        room = {
+          ...room,
+          players: {
+            ...room.players,
+            [socket.id]: {
+              ...room.players[socket.id],
+              currentOpenAnswer: answer.answer
+            }
+          }
+        }
+
+        if (number_of_answers === Object.keys(room.players).length) {
+          io.emit('open_answers_checked');
+          io.to(Object.keys(room.presenter)[0]).emit('open_answers_checked_presenter', room);
+        }
+      }
+    }
+  });
+
+  socket.on('check_open_answers', (rightSockets) => {
+    rightSockets.forEach(socketId => {
+      room = {
+        ...room,
+        players: {
+          ...room.players,
+          [socketId]: {
+            ...room.players[socketId],
+            score: room.players[socketId].score + 1
+          }
+        }
+      }
+    });
+  });
+
+  socket.on('go_next_question', () => {
+    currentQuestion++;
+    number_of_answers = 0;
+    if (currentQuestion === questions.length) {
+      const ranking = createRanking(room.players);
+      io.emit('game_finished', ranking);
+      room = {
+        presenter: {
+    
+        },
+        players: {
+    
+        }
+      };
+      currentQuestion = 0;
+    } else {
+      const {real_answer, ...question} = questions[currentQuestion];
+      io.emit('next_question', question);
+      real_answer_to_check = real_answer;
+    }
+  });
+
 });
 
 server.listen(8080, () => {
