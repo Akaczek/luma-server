@@ -9,14 +9,17 @@ const { Server } = require("socket.io");
 const io = new Server(server, {
   cors: {
     origin: "*",
-  },
+    methods: ["PUT", "GET", "POST", "DELETE", "OPTIONS"],
+    credentials: false
+  }
 });
 
-let ngrokUrl = '';
+let gameCode = '';
 
 (async function() {
-  ngrokUrl = await ngrok.connect({proto: 'tcp', addr: 8080, authtoken: process.env.AUTH_TOKEN});
-  console.log(ngrokUrl);
+  const ngrokUrl = await ngrok.connect({proto: 'http', addr: 8080, authtoken: process.env.AUTH_TOKEN_1});
+  gameCode = ngrokUrl.slice(8 , ngrokUrl.indexOf('.ngrok-free.app'));
+
 })();
 
 const createRanking = (players) => {
@@ -67,21 +70,27 @@ let real_answer_to_check = '';
 
 let number_of_answers = 0;
 
+let isGameStarted = false;
+
 io.on("connection", (socket) => {
   console.log("a user connected");
   
   socket.on("disconnect", () => {
-    console.log("user disconnected");
     delete room.presenter[socket.id];
     delete room.players[socket.id];
-    console.log(room);
-
+    console.log("a user disconnected");
     io.emit('user_disconnected', room);
   });
 
   socket.on('join', (data) => {
 
     if (data.type === 'player') {
+
+      if (isGameStarted) {
+        const {real_answer, ...question} = questions[currentQuestion];
+        socket.emit('next_question', question);
+      }
+
       room = {
         ...room,
         players: {
@@ -97,6 +106,9 @@ io.on("connection", (socket) => {
     }
 
     if (data.type === 'presenter') {
+      socket.emit('game_code', gameCode);
+      // socket.emit('game_code', 'Temp');
+
       room = {
         ...room,
         presenter: {
@@ -121,7 +133,8 @@ io.on("connection", (socket) => {
       .then(responses => Promise.all(responses.map(r => r.json())))
       .then(data => {
         questions = data.map(d => d.items).flat(2).sort(() => Math.random() - 0.5);
-        io.emit('game_started');
+        isGameStarted = true;
+        io.emit('game_started', Object.keys(room.players).length);
 
         const {real_answer, ...question} = questions[currentQuestion];
         io.emit('next_question', question);
@@ -129,10 +142,24 @@ io.on("connection", (socket) => {
       });
   });
 
+  socket.on('times_up', () => {
+    if (questions[currentQuestion].collectionName === 'quiz_question') {
+      io.emit('close_answers_checked', real_answer_to_check);
+    } else {
+      io.emit('open_answers_checked');
+      io.to(Object.keys(room.presenter)[0]).emit('open_answers_checked_presenter', room);
+      Object.keys(room.players).forEach(socketId => {
+        room.players[socketId].currentOpenAnswer = '';
+      });
+    }
+  });
+
   socket.on('answer', (answer) => {
     const {real_answer, ...question} = questions[currentQuestion];
     if(answer.questionId === question.id){
       number_of_answers++;
+
+      io.to(Object.keys(room.presenter)[0]).emit('new_answer', number_of_answers);
 
       if (question.collectionName === 'quiz_question' && real_answer === answer.answer) {
         socket.emit('good_answer');            
@@ -150,7 +177,6 @@ io.on("connection", (socket) => {
 
       if (question.collectionName === 'quiz_question'){
         if (number_of_answers === Object.keys(room.players).length) {
-          console.log('wyslano prawidziwa odpowiedz');     
           io.emit('close_answers_checked', real_answer_to_check);
         }
       }
@@ -170,6 +196,9 @@ io.on("connection", (socket) => {
         if (number_of_answers === Object.keys(room.players).length) {
           io.emit('open_answers_checked');
           io.to(Object.keys(room.presenter)[0]).emit('open_answers_checked_presenter', room);
+          Object.keys(room.players).forEach(socketId => {
+            room.players[socketId].currentOpenAnswer = '';
+          });
         }
       }
     }
@@ -193,13 +222,14 @@ io.on("connection", (socket) => {
   socket.on('go_next_question', () => {
     currentQuestion++;
     number_of_answers = 0;
+    io.to(Object.keys(room.presenter)[0]).emit('new_answer', number_of_answers);
     if (currentQuestion === questions.length) {
       const ranking = createRanking(room.players);
       const rankedRanking = assignRanks(ranking);
-      console.log(rankedRanking);
+      isGameStarted = false;
       io.to(Object.keys(room.presenter)[0]).emit('game_finished', rankedRanking);
       Object.keys(room.players).forEach(socketId => {
-        io.to(socketId).emit('game_finished', rankedRanking.find(player => player.socketId === socketId));
+        io.to(socketId).emit('game_finished', {...rankedRanking.find(player => player.socketId === socketId), questionQty: currentQuestion} );
       });
       room = {
         presenter: {
