@@ -1,4 +1,6 @@
 const express = require("express");
+const ngrok = require('ngrok');
+require("dotenv").config();
 const app = express();
 const http = require("http");
 const fetch = require("node-fetch");
@@ -10,16 +12,42 @@ const io = new Server(server, {
   },
 });
 
+let ngrokUrl = '';
+
+(async function() {
+  ngrokUrl = await ngrok.connect({proto: 'tcp', addr: 8080, authtoken: process.env.AUTH_TOKEN});
+  console.log(ngrokUrl);
+})();
+
 const createRanking = (players) => {
   const ranking = Object.keys(players).map(key => {
     return {
       userName: players[key].userName,
+      socketId: key,
       score: players[key].score
     }
   }).sort((a, b) => b.score - a.score);
 
   return ranking;
 }
+
+const assignRanks = (ranking) => {
+  let rank = 1;
+  let lastScore = ranking[0].score;
+  let lastRank = 1;
+  ranking.forEach((player, index) => {
+    if (player.score === lastScore) {
+      ranking[index].rank = lastRank;
+    } else {
+      ranking[index].rank = rank;
+      lastRank = rank;
+      lastScore = player.score;
+    }
+    rank++;
+  });
+  return ranking;
+}
+
 
 
 let room = {
@@ -46,6 +74,7 @@ io.on("connection", (socket) => {
     console.log("user disconnected");
     delete room.presenter[socket.id];
     delete room.players[socket.id];
+    console.log(room);
 
     io.emit('user_disconnected', room);
   });
@@ -106,7 +135,7 @@ io.on("connection", (socket) => {
       number_of_answers++;
 
       if (question.collectionName === 'quiz_question' && real_answer === answer.answer) {
-        socket.emit('good_answer');
+        socket.emit('good_answer');            
         room = {
           ...room,
           players: {
@@ -117,9 +146,12 @@ io.on("connection", (socket) => {
             }
           }
         }
+      }
 
+      if (question.collectionName === 'quiz_question'){
         if (number_of_answers === Object.keys(room.players).length) {
-          io.emit('close_answers_checked', question.real_answer);
+          console.log('wyslano prawidziwa odpowiedz');     
+          io.emit('close_answers_checked', real_answer_to_check);
         }
       }
 
@@ -163,7 +195,12 @@ io.on("connection", (socket) => {
     number_of_answers = 0;
     if (currentQuestion === questions.length) {
       const ranking = createRanking(room.players);
-      io.emit('game_finished', ranking);
+      const rankedRanking = assignRanks(ranking);
+      console.log(rankedRanking);
+      io.to(Object.keys(room.presenter)[0]).emit('game_finished', rankedRanking);
+      Object.keys(room.players).forEach(socketId => {
+        io.to(socketId).emit('game_finished', rankedRanking.find(player => player.socketId === socketId));
+      });
       room = {
         presenter: {
     
