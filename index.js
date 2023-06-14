@@ -80,6 +80,28 @@ io.on("connection", (socket) => {
     delete room.players[socket.id];
     console.log("a user disconnected");
     io.emit('user_disconnected', room);
+
+    const {real_answer, ...question} = questions[currentQuestion];
+
+    number_of_answers--;
+    if (number_of_answers < 0) {
+      number_of_answers = 0;
+    }
+    io.to(Object.keys(room.presenter)[0]).emit('new_answer', number_of_answers);
+
+    if (question.collectionName === 'quiz_question'){
+      if (number_of_answers === Object.keys(room.players).length) {
+        io.emit('close_answers_checked', real_answer_to_check);
+      }
+    } else if (question.collectionName === 'music_question' || question.collectionName === 'open_question') {
+      if (number_of_answers === Object.keys(room.players).length) {
+        io.emit('open_answers_checked');
+        io.to(Object.keys(room.presenter)[0]).emit('open_answers_checked_presenter', room);
+        Object.keys(room.players).forEach(socketId => {
+          room.players[socketId].currentOpenAnswer = '';
+        });
+      }
+    }
   });
 
   socket.on('join', (data) => {
@@ -134,7 +156,7 @@ io.on("connection", (socket) => {
       .then(data => {
         questions = data.map(d => d.items).flat(2).sort(() => Math.random() - 0.5);
         isGameStarted = true;
-        io.emit('game_started', Object.keys(room.players).length);
+        io.emit('game_started');
 
         const {real_answer, ...question} = questions[currentQuestion];
         io.emit('next_question', question);
