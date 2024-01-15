@@ -81,7 +81,9 @@ io.on("connection", (socket) => {
     console.log("a user disconnected");
     io.emit('user_disconnected', room);
 
-    const {real_answer, ...question} = questions[currentQuestion];
+    if (Object.keys(room.players).length !== 0) {
+      const {real_answer, ...question} = questions[currentQuestion];
+    }
 
     number_of_answers--;
     if (number_of_answers < 0) {
